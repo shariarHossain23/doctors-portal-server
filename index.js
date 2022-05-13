@@ -53,7 +53,8 @@ async function run() {
     //  get booking data
 
     app.get('/booking',async(req,res)=>{
-      const query = {}
+      const patient = req.query.patient
+      const query = {patient:patient}
       const cursor = bookingCollection.find(query)
       const result = await cursor.toArray()
       res.send(result)
