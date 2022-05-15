@@ -1,6 +1,7 @@
 const express = require('express')
 const cors = require('cors')
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, Admin } = require('mongodb');
+const jwt= require('jsonwebtoken');
 require ('dotenv').config()
 const app = express();
 const port = process.env.PORT || 5000;
@@ -16,13 +17,82 @@ app.use(express.json())
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.boaje.mongodb.net/myFirstDatabase?retryWrites=true&w=majority`;
 const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true, serverApi: ServerApiVersion.v1 });
 
+function verifyJwt(req,res,next){
+  const authHeader = req.headers.authorization
+  // console.log(authHeader);
+  if(!authHeader){
+    return res.status(401).send({message:'unauthorized'})
+  }
+
+  const token = authHeader.split(" ")[1];
+  // console.log(token);
+  jwt.verify(token,process.env.DB_TOKEN, function(err, decoded) {
+    if(err){
+      return res.status(403).send({message:"forbidden access"})
+    }
+    req.decoded = decoded
+    next()
+  });
+}
 async function run() {
   try{
     await client.connect();
     const doctorService = client.db("doctors_portal").collection("services");
     const bookingCollection = client.db("doctors_portal").collection("booking");
+    const userCollection = client.db("doctors_portal").collection("user");
 
 
+    // put all  user 
+    app.put("/user/:email",async(req,res)=>{
+      const email = req.params.email;
+      const user = req.body
+      const filter ={email:email}
+      const options = { upsert: true };
+      const updateDoc = {
+        $set: user,
+      };
+
+      
+      const result = await userCollection.updateOne(filter,updateDoc,options)
+      const token = jwt.sign({email:email},process.env.DB_TOKEN,{ expiresIn: '1h' })
+      res.send({result,token})
+    })
+  
+
+    // make admin
+    app.put("/user/admin/:email",verifyJwt,async(req,res)=>{
+      const email = req.params.email;
+
+      const requester = req.decoded.email;
+      const requesterAccount = await userCollection.findOne({email:requester});
+      if(requesterAccount.role=== "admin"){
+        const filter ={email:email}
+        const updateDoc = {
+          $set: {role:"admin"},
+        };
+  
+        const result = await userCollection.updateOne(filter,updateDoc)
+        res.send(result)
+
+      }
+      else{
+        res.status(403).send({message:"forbidden"})
+      }
+     
+    })
+
+    // admin
+    app.get("/admin/:email",async(req,res)=>{
+      const email = req.params.email
+      const user = await userCollection.findOne({email:email});
+      const isAdmin = user.role === "admin"
+      res.send({admin:isAdmin})
+    })
+    // all user verifyJwt,
+    app.get("/user",async(req,res)=>{
+      const users = await userCollection.find().toArray();
+      res.send(users)
+    })
     // get services data
     app.get("/services",async(req,res)=>{
       const query = {}
@@ -46,18 +116,27 @@ async function run() {
         const booked = serviceBooking.map(s => s.slot)
         const available = service.slots.filter(slot => !booked.includes(slot))
         service.slots = available;
-        // service.booked = booked;
       })
       res.send(services)
     })
     //  get booking data
-
-    app.get('/booking',async(req,res)=>{
+    // verifyJwt,
+    app.get('/booking',verifyJwt,async(req,res)=>{
       const patient = req.query.patient
-      const query = {patient:patient}
-      const cursor = bookingCollection.find(query)
-      const result = await cursor.toArray()
-      res.send(result)
+      const decodedEmail = req.decoded.email;
+      
+    
+      if(patient === decodedEmail){
+        const query = {patient:patient}
+        const cursor = bookingCollection.find(query)
+        const result = await cursor.toArray()
+        res.send(result)
+      }
+      else{
+        return res.status(403).send({message:"forbidden access"})
+      }
+     
+     
     })
     // post booking
    app.post("/booking",async(req,res)=>{
